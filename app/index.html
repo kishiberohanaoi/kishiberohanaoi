@@ -155,9 +155,33 @@ details summary { cursor: pointer; color: var(--ink-soft); font-size: 13px; }
       </details>
       <details id="utolBox">
         <summary>UTOL から取り込む</summary>
-        <div style="display:grid;gap:8px;margin-top:8px">
-          <p class="muted">PC で同期スクリプト <code>python utol/utol_sync.py</code> を実行すると <code>utol_export.json</code> ができます。それを選ぶと、Claude が課題・締切・授業を抜き出します。追加する前に確認できます。</p>
-          <label>utol_export.json<input id="utolFile" type="file" accept=".json,application/json"></label>
+        <div style="display:grid;gap:12px;margin-top:8px">
+          <p class="muted">スマホのブラウザで UTOL にログインして、課題の一覧や授業のページを開いてから、次のどちらかで取り込みます。Claude が課題・締切・授業を抜き出し、追加する前に確認できます。</p>
+          <div style="display:grid;gap:6px">
+            <div class="label">方法1　文字を貼り付ける</div>
+            <label>UTOL のページからコピーした文字（複数ページ分つなげてもOK）<textarea id="utolPaste" placeholder="UTOL の課題ページで全選択 → コピーして、ここに貼り付け"></textarea></label>
+            <div class="row" style="justify-content:flex-end"><button class="btn" type="button" id="utolPasteGo">貼り付けた内容から取り込む</button></div>
+            <details>
+              <summary>ワンタップでページ全体をコピーする方法（ブックマーク）</summary>
+              <div style="display:grid;gap:6px;margin-top:6px" class="muted">
+                <span>1. 下のコードをコピーする</span>
+                <code id="bookmarklet" style="display:block;overflow-wrap:anywhere;font-size:11px;padding:8px;background:var(--bg);border-radius:6px;user-select:all">javascript:(()=&gt;{const t=document.title+'\n'+location.href+'\n\n'+document.body.innerText;const done=()=&gt;alert('UTOLのページをコピーしました。学習デスクに貼り付けてください');navigator.clipboard.writeText(t).then(done,()=&gt;{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();done()})})()</code>
+                <div><button class="btn ghost small" type="button" id="copyBookmarklet">コードをコピー</button></div>
+                <span>2. iPhone（Safari）: どのページでもいいのでブックマークに追加 →「ブックマークを編集」で名前を「UTOLコピー」、アドレスをコピーしたコードに書き換える</span>
+                <span>　Android（Chrome）: 同じようにブックマークを作り、URL をコードに書き換える</span>
+                <span>3. UTOL の課題ページで、iPhone はブックマークから「UTOLコピー」をタップ。Android はアドレスバーに「UTOLコピー」と入力して候補をタップ</span>
+                <span>4. 「コピーしました」と出たら、ここに貼り付ける</span>
+              </div>
+            </details>
+          </div>
+          <div style="display:grid;gap:6px">
+            <div class="label">方法2　スクリーンショットを選ぶ</div>
+            <label>UTOL の画面のスクリーンショット（複数可）<input id="utolShots" type="file" multiple accept="image/png,image/jpeg,image/webp"></label>
+          </div>
+          <div style="display:grid;gap:6px">
+            <div class="label">PC の同期スクリプトを使う場合</div>
+            <label><code>python utol/utol_sync.py</code> が書き出した utol_export.json<input id="utolFile" type="file" accept=".json,application/json"></label>
+          </div>
           <p class="status" id="utolStatus"></p>
           <div id="utolPreview" style="display:grid;gap:8px" hidden>
             <div id="utolCourses"></div>
@@ -455,52 +479,84 @@ details summary { cursor: pointer; color: var(--ink-soft); font-size: 13px; }
   let utolResult = null;
   const CHUNK_BYTES = 120 * 1024;
   const enc = new TextEncoder();
-  $("utolFile").addEventListener("change", async () => {
-    const f = $("utolFile").files[0]; if (!f) return;
-    const status = $("utolStatus"); status.className = "status"; $("utolPreview").hidden = true;
-    if (!state.sample) { status.textContent = "この画面では Claude を使えないため取り込めません。"; return; }
-    let data;
-    try { data = JSON.parse(await f.text()); } catch { data = null; }
-    if (!Array.isArray(data?.pages) || !data.pages.length) {
-      status.className = "status error"; status.textContent = "utol_export.json ではないようです。同期スクリプトが書き出したファイルを選んでください。"; $("utolFile").value = ""; return;
-    }
-    // ページをまとめて、1回に送れる大きさごとに分ける
+  function chunkBlocks(blocks) {
     const chunks = []; let cur = "";
-    for (const p of data.pages) {
-      const block = `### ${p.title || ""}\n${p.url || ""}\n${String(p.text || "").slice(0, 15000)}\n\n`;
+    for (const block of blocks) {
       if (cur && enc.encode(cur + block).length > CHUNK_BYTES) { chunks.push(cur); cur = ""; }
       cur += block;
     }
     if (cur) chunks.push(cur);
-
-    const d = now();
-    const items = [], courses = [];
-    try {
-      for (let i = 0; i < chunks.length; i++) {
-        status.textContent = `UTOL の内容を読んでいます…（${i + 1}/${chunks.length}）`;
-        const res = await state.sample.json(`以下は大学の学習管理システム UTOL の画面から取り出したテキストです（${data.exportedAt || "取得日時不明"} 取得）。
-現在日時: ${d.getFullYear()}/${fmtDate(d)}
-
-ここから次の2つを抜き出して、JSON だけを返してください。
+    return chunks;
+  }
+  const EXTRACT_SPEC = `次の2つを抜き出して、JSON だけを返してください。
 1. courses: 履修している授業。{"name": 授業名, "slot": 曜限（例 "月2"、わからなければ ""）}
 2. items: 学生がやるべき課題・レポート・小テスト・試験など、締切や実施日があるもの。
-   {"title": 内容（授業名を含めず簡潔に）, "course": 授業名, "due": "YYYY-MM-DDTHH:MM"（日本時間。時刻不明なら "T23:59"、日付不明なら null）, "kind": "課題" | "テスト" | "その他", "url": 該当ページのURL}
+   {"title": 内容（授業名を含めず簡潔に）, "course": 授業名, "due": "YYYY-MM-DDTHH:MM"（日本時間。時刻不明なら "T23:59"、日付不明なら null）, "kind": "課題" | "テスト" | "その他"}
    - 締切が現在より前のもの、提出済み・終了と書かれているものは除く
    - 一般的なお知らせや、やることのない情報は除く
    - 年が書かれていない日付は、現在日時から見て一番自然な年にする
 
-形式: {"courses": [...], "items": [...]}
+形式: {"courses": [...], "items": [...]}`;
 
-${chunks[i]}`, { modelTier: "default" });
+  $("utolFile").addEventListener("change", async () => {
+    const f = $("utolFile").files[0]; if (!f) return;
+    $("utolFile").value = "";
+    let data;
+    try { data = JSON.parse(await f.text()); } catch { data = null; }
+    if (!Array.isArray(data?.pages) || !data.pages.length) {
+      $("utolStatus").className = "status error"; $("utolStatus").textContent = "utol_export.json ではないようです。同期スクリプトが書き出したファイルを選んでください。"; return;
+    }
+    const chunks = chunkBlocks(data.pages.map((p) => `### ${p.title || ""}\n${p.url || ""}\n${String(p.text || "").slice(0, 15000)}\n\n`));
+    runUtolExtract(chunks.map((c) => ({ text: c })), `画面から取り出したテキスト（${data.exportedAt || "取得日時不明"} 取得）`);
+  });
+  $("utolPasteGo").addEventListener("click", async () => {
+    const text = $("utolPaste").value.trim();
+    if (!text) { $("utolStatus").className = "status error"; $("utolStatus").textContent = "UTOL のページからコピーした文字を貼り付けてください。"; return; }
+    if (enc.encode(text).length > 4 * CHUNK_BYTES) { $("utolStatus").className = "status error"; $("utolStatus").textContent = "貼り付けた文字が多すぎます。課題のページだけにして、何回かに分けて取り込んでください。"; return; }
+    const ok = await runUtolExtract(chunkBlocks(text.split(/\n(?=\S)/).map((l) => l + "\n")).map((c) => ({ text: c })), "画面からコピーして貼り付けたテキスト");
+    if (ok) $("utolPaste").value = "";
+  });
+  $("utolShots").addEventListener("change", async () => {
+    const files = [...$("utolShots").files]; $("utolShots").value = "";
+    if (!files.length) return;
+    const limits = state.sample ? await state.sample.limits().catch(() => null) : null;
+    const max = limits?.images?.maxCount ?? 0;
+    if (!max) { $("utolStatus").className = "status error"; $("utolStatus").textContent = "この環境では画像を送れません。文字の貼り付けで取り込んでください。"; return; }
+    const batches = [];
+    for (let i = 0; i < files.length; i += max) batches.push({ text: "", images: files.slice(i, i + max) });
+    runUtolExtract(batches, "画面のスクリーンショット（添付画像）");
+  });
+  $("copyBookmarklet").addEventListener("click", async () => {
+    const btn = $("copyBookmarklet");
+    try { await navigator.clipboard.writeText($("bookmarklet").textContent); btn.textContent = "コピーしました"; }
+    catch { const r = document.createRange(); r.selectNodeContents($("bookmarklet")); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); btn.textContent = "選択したのでコピーしてください"; }
+    setTimeout(() => { btn.textContent = "コードをコピー"; }, 3000);
+  });
+
+  // parts: [{text, images?}] を順に Claude に読ませて、プレビューを出す。成功したら true
+  async function runUtolExtract(parts, sourceLabel) {
+    const status = $("utolStatus"); status.className = "status"; $("utolPreview").hidden = true;
+    if (!state.sample) { status.textContent = "この画面では Claude を使えないため取り込めません。"; return false; }
+    const d = now();
+    const items = [], courses = [];
+    try {
+      for (let i = 0; i < parts.length; i++) {
+        status.textContent = `UTOL の内容を読んでいます…${parts.length > 1 ? `（${i + 1}/${parts.length}）` : ""}`;
+        const opts = { modelTier: "default" };
+        if (parts[i].images) opts.images = parts[i].images;
+        const res = await state.sample.json(`以下は大学の学習管理システム UTOL の、${sourceLabel}です。
+現在日時: ${d.getFullYear()}/${fmtDate(d)}
+
+ここから${EXTRACT_SPEC}
+${parts[i].text ? "\n" + parts[i].text : ""}`, opts);
         if (Array.isArray(res?.courses)) courses.push(...res.courses);
         if (Array.isArray(res?.items)) items.push(...res.items);
       }
     } catch (e) {
       status.className = "status error";
-      status.textContent = e?.code === "invalid_json" ? "抜き出しに失敗しました。もう一度ファイルを選び直してください。" : sampleErrorText(e);
-      $("utolFile").value = ""; return;
+      status.textContent = e?.code === "invalid_json" ? "抜き出しに失敗しました。もう一度試してください。" : sampleErrorText(e);
+      return false;
     }
-    $("utolFile").value = "";
 
     const known = new Set(state.tasks.map((t) => t.uid).filter(Boolean));
     const seen = new Set();
@@ -515,8 +571,11 @@ ${chunks[i]}`, { modelTier: "default" });
       .filter((c) => !haveNames.has(c.name) && !seenC.has(c.name) && seenC.add(c.name));
     utolResult = { items: cleanItems, courses: cleanCourses };
     renderUtolPreview();
-    status.textContent = `課題 ${cleanItems.length} 件、新しい授業 ${cleanCourses.length} 件が見つかりました。追加するものを選んでください。`;
-  });
+    status.textContent = cleanItems.length || cleanCourses.length
+      ? `課題 ${cleanItems.length} 件、新しい授業 ${cleanCourses.length} 件が見つかりました。追加するものを選んでください。`
+      : "課題や授業は見つかりませんでした。課題一覧のページで試してみてください。";
+    return true;
+  }
 
   function checkRow(id, checked, labelText, sub) {
     const l = document.createElement("label");
