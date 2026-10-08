@@ -153,6 +153,19 @@ details summary { cursor: pointer; color: var(--ink-soft); font-size: 13px; }
         </div>
         <p class="status" id="icsStatus"></p>
       </details>
+      <details id="utolBox">
+        <summary>UTOL から取り込む</summary>
+        <div style="display:grid;gap:8px;margin-top:8px">
+          <p class="muted">PC で同期スクリプト <code>python utol/utol_sync.py</code> を実行すると <code>utol_export.json</code> ができます。それを選ぶと、Claude が課題・締切・授業を抜き出します。追加する前に確認できます。</p>
+          <label>utol_export.json<input id="utolFile" type="file" accept=".json,application/json"></label>
+          <p class="status" id="utolStatus"></p>
+          <div id="utolPreview" style="display:grid;gap:8px" hidden>
+            <div id="utolCourses"></div>
+            <div id="utolItems"></div>
+            <div class="row" style="justify-content:flex-end"><button class="btn" type="button" id="utolAdd">選んだものを追加</button></div>
+          </div>
+        </div>
+      </details>
     </form>
 
     <div class="card">
@@ -437,6 +450,114 @@ details summary { cursor: pointer; color: var(--ink-soft); font-size: 13px; }
     if (!h) return new Date(+y, mo - 1, +d, 23, 59);
     return z ? new Date(Date.UTC(+y, mo - 1, +d, +h, +mi)) : new Date(+y, mo - 1, +d, +h, +mi);
   }
+
+  // ---------- UTOL 取り込み ----------
+  let utolResult = null;
+  const CHUNK_BYTES = 120 * 1024;
+  const enc = new TextEncoder();
+  $("utolFile").addEventListener("change", async () => {
+    const f = $("utolFile").files[0]; if (!f) return;
+    const status = $("utolStatus"); status.className = "status"; $("utolPreview").hidden = true;
+    if (!state.sample) { status.textContent = "この画面では Claude を使えないため取り込めません。"; return; }
+    let data;
+    try { data = JSON.parse(await f.text()); } catch { data = null; }
+    if (!Array.isArray(data?.pages) || !data.pages.length) {
+      status.className = "status error"; status.textContent = "utol_export.json ではないようです。同期スクリプトが書き出したファイルを選んでください。"; $("utolFile").value = ""; return;
+    }
+    // ページをまとめて、1回に送れる大きさごとに分ける
+    const chunks = []; let cur = "";
+    for (const p of data.pages) {
+      const block = `### ${p.title || ""}\n${p.url || ""}\n${String(p.text || "").slice(0, 15000)}\n\n`;
+      if (cur && enc.encode(cur + block).length > CHUNK_BYTES) { chunks.push(cur); cur = ""; }
+      cur += block;
+    }
+    if (cur) chunks.push(cur);
+
+    const d = now();
+    const items = [], courses = [];
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        status.textContent = `UTOL の内容を読んでいます…（${i + 1}/${chunks.length}）`;
+        const res = await state.sample.json(`以下は大学の学習管理システム UTOL の画面から取り出したテキストです（${data.exportedAt || "取得日時不明"} 取得）。
+現在日時: ${d.getFullYear()}/${fmtDate(d)}
+
+ここから次の2つを抜き出して、JSON だけを返してください。
+1. courses: 履修している授業。{"name": 授業名, "slot": 曜限（例 "月2"、わからなければ ""）}
+2. items: 学生がやるべき課題・レポート・小テスト・試験など、締切や実施日があるもの。
+   {"title": 内容（授業名を含めず簡潔に）, "course": 授業名, "due": "YYYY-MM-DDTHH:MM"（日本時間。時刻不明なら "T23:59"、日付不明なら null）, "kind": "課題" | "テスト" | "その他", "url": 該当ページのURL}
+   - 締切が現在より前のもの、提出済み・終了と書かれているものは除く
+   - 一般的なお知らせや、やることのない情報は除く
+   - 年が書かれていない日付は、現在日時から見て一番自然な年にする
+
+形式: {"courses": [...], "items": [...]}
+
+${chunks[i]}`, { modelTier: "default" });
+        if (Array.isArray(res?.courses)) courses.push(...res.courses);
+        if (Array.isArray(res?.items)) items.push(...res.items);
+      }
+    } catch (e) {
+      status.className = "status error";
+      status.textContent = e?.code === "invalid_json" ? "抜き出しに失敗しました。もう一度ファイルを選び直してください。" : sampleErrorText(e);
+      $("utolFile").value = ""; return;
+    }
+    $("utolFile").value = "";
+
+    const known = new Set(state.tasks.map((t) => t.uid).filter(Boolean));
+    const seen = new Set();
+    const cleanItems = items.filter((x) => x && String(x.title || "").trim()).map((x) => {
+      const due = x.due && !isNaN(new Date(x.due)) ? new Date(x.due) : null;
+      const uid = "utol:" + String(x.course || "") + "|" + String(x.title).trim() + "|" + (due ? due.toISOString().slice(0, 16) : "");
+      return { title: String(x.title).trim(), course: String(x.course || "").trim(), due, kind: String(x.kind || ""), uid, exists: known.has(uid) };
+    }).filter((x) => !seen.has(x.uid) && seen.add(x.uid) && !(x.due && x.due < d));
+    const haveNames = new Set(state.courses.map((c) => c.name));
+    const seenC = new Set();
+    const cleanCourses = courses.filter((c) => c && String(c.name || "").trim()).map((c) => ({ name: String(c.name).trim(), slot: String(c.slot || "").trim() }))
+      .filter((c) => !haveNames.has(c.name) && !seenC.has(c.name) && seenC.add(c.name));
+    utolResult = { items: cleanItems, courses: cleanCourses };
+    renderUtolPreview();
+    status.textContent = `課題 ${cleanItems.length} 件、新しい授業 ${cleanCourses.length} 件が見つかりました。追加するものを選んでください。`;
+  });
+
+  function checkRow(id, checked, labelText, sub) {
+    const l = document.createElement("label");
+    l.style.cssText = "display:flex;gap:8px;align-items:flex-start;font-size:14px;color:var(--ink);flex:none";
+    const cb = Object.assign(document.createElement("input"), { type: "checkbox", id, checked });
+    cb.style.cssText = "width:18px;height:18px;margin-top:3px;flex:none;accent-color:var(--accent)";
+    const span = document.createElement("span"); span.textContent = labelText;
+    if (sub) span.append(Object.assign(document.createElement("span"), { className: "muted", textContent: "　" + sub }));
+    l.append(cb, span); return l;
+  }
+  function renderUtolPreview() {
+    const { items, courses } = utolResult;
+    const cBox = $("utolCourses"), iBox = $("utolItems"); cBox.replaceChildren(); iBox.replaceChildren();
+    if (courses.length) {
+      cBox.append(Object.assign(document.createElement("div"), { className: "label", textContent: "授業" }));
+      courses.forEach((c, i) => cBox.append(checkRow("utolC" + i, true, c.name, c.slot)));
+    }
+    if (items.length) {
+      iBox.append(Object.assign(document.createElement("div"), { className: "label", textContent: "課題・テスト" }));
+      items.forEach((x, i) => iBox.append(checkRow("utolI" + i, !x.exists, x.title,
+        [x.course, x.due ? fmtDate(x.due) : "締切不明", x.exists ? "取り込み済み" : ""].filter(Boolean).join(" · "))));
+    }
+    $("utolPreview").hidden = !(items.length || courses.length);
+  }
+  $("utolAdd").addEventListener("click", () => {
+    if (!utolResult) return;
+    const added = [];
+    utolResult.courses.forEach((c, i) => { if ($("utolC" + i)?.checked) added.push({ id: newId(), name: c.name, slot: c.slot, exam: null, notes: "UTOL から取り込み" }); });
+    const all = [...state.courses, ...added];
+    if (added.length) saveProfile({ courses: all });
+    const findCourse = (name) => !name ? null : (all.find((c) => c.name === name) || all.find((c) => c.name.includes(name) || name.includes(c.name)))?.id || null;
+    let n = 0;
+    utolResult.items.forEach((x, i) => {
+      if (!$("utolI" + i)?.checked) return;
+      saveTask({ id: newId(), title: x.kind === "テスト" && !x.title.includes("テスト") ? `【テスト】${x.title}` : x.title,
+        course: findCourse(x.course), due: x.due ? x.due.toISOString() : null, status: "todo", uid: x.uid, createdAt: Date.now() });
+      n++;
+    });
+    $("utolStatus").textContent = `課題 ${n} 件と授業 ${added.length} 件を追加しました。`;
+    $("utolPreview").hidden = true; utolResult = null; renderAll();
+  });
 
   // ---------- Claude ----------
   function sampleErrorText(e) {

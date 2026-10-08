@@ -7,3 +7,5 @@ materials/**/*.pdf
 materials/**/*.png
 materials/**/*.jpg
 materials/**/*.jpeg
+utol_export.json
+materials/utol/
