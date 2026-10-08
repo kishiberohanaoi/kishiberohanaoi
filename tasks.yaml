@@ -1,0 +1,27 @@
+# 授業一覧。id は短い英数字にしておくと materials/<id>/ と対応させやすい
+# （以下はサンプルです。自分の授業に書き換えてください）
+courses:
+- id: linalg
+  name: 線形代数学
+  schedule: 月2・木2
+  exam: 2027-01-25
+  notes: 中間レポートあり
+- id: info
+  name: 情報
+  schedule: 水3
+
+# タスク一覧。status は todo / doing / done
+# ※ studybot add / done / import-ics で書き換えるとコメントは消えます
+tasks:
+- id: 1
+  title: 線形代数 レポート第3回
+  course: linalg
+  due: 2026-10-15 23:59
+  estimate_h: 3
+  status: todo
+- id: 2
+  title: 情報 Python課題2
+  course: info
+  due: 2026-10-12
+  estimate_h: 2
+  status: todo

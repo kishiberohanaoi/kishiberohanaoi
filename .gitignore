@@ -1,0 +1,9 @@
+__pycache__/
+*.egg-info/
+.venv/
+.env
+# 講義資料は著作物なので公開リポジトリに上げないようにデフォルトで除外
+materials/**/*.pdf
+materials/**/*.png
+materials/**/*.jpg
+materials/**/*.jpeg
