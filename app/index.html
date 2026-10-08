@@ -1,0 +1,669 @@
+<title>Gakushu Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<style>
+/* Layout: 時間割表のような罫線の上に、締切の近いものだけ蛍光ペンで目立たせる。一列、上部にタブ。 */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --ink: #1b2430;
+  --ink-soft: #5b6676;
+  --rule: #dde3ea;
+  --accent: #2456a6;
+  --accent-ink: #ffffff;
+  --marker: #fbe68a;
+  --danger: #c43d3d;
+  --warn: #b36b00;
+  --ok: #2f7d4f;
+  --font-body: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161c; --surface: #1a2029; --ink: #e6ebf1; --ink-soft: #97a3b4; --rule: #2b3440;
+    --accent: #7aa7f0; --accent-ink: #0c1420; --marker: #5c5020; --danger: #f07a7a; --warn: #e5a54a; --ok: #6cc28f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161c; --surface: #1a2029; --ink: #e6ebf1; --ink-soft: #97a3b4; --rule: #2b3440;
+  --accent: #7aa7f0; --accent-ink: #0c1420; --marker: #5c5020; --danger: #f07a7a; --warn: #e5a54a; --ok: #6cc28f;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 64px; display: grid; gap: 20px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+h1 { font-size: 22px; margin: 0; letter-spacing: .02em; }
+h1 small { font-size: 13px; font-weight: 400; color: var(--ink-soft); margin-left: 8px; }
+.today { font-family: var(--font-mono); font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+h2 { font-size: 16px; margin: 0; text-wrap: balance; }
+nav { display: flex; gap: 4px; border-bottom: 1px solid var(--rule); position: sticky; top: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 2; }
+nav button { appearance: none; border: 0; background: none; font: inherit; color: var(--ink-soft); padding: 10px 14px; border-bottom: 2px solid transparent; cursor: pointer; font-weight: 500; }
+nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+section.panel { display: grid; gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.row > * { min-width: 0; }
+label { display: grid; gap: 4px; font-size: 12px; color: var(--ink-soft); flex: 1 1 140px; }
+input, select, textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; width: 100%; }
+textarea { min-height: 90px; resize: vertical; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn { appearance: none; font: inherit; font-weight: 700; border-radius: 6px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); white-space: nowrap; }
+.btn.ghost { background: transparent; color: var(--accent); }
+.btn.small { padding: 4px 10px; font-size: 13px; font-weight: 500; }
+.btn:disabled { opacity: .5; cursor: default; }
+.muted { color: var(--ink-soft); font-size: 13px; }
+.label { font-size: 11px; letter-spacing: .08em; color: var(--ink-soft); font-weight: 700; }
+
+/* タスク一覧 */
+.tasks { list-style: none; margin: 0; padding: 0; display: grid; }
+.task { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--rule); }
+.task:first-child { border-top: 0; }
+.task input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+.task .title { font-weight: 500; overflow-wrap: anywhere; }
+.task.urgent .title { background: linear-gradient(transparent 55%, var(--marker) 55%); }
+.task.done .title { text-decoration: line-through; color: var(--ink-soft); }
+.task .meta { font-size: 12px; color: var(--ink-soft); display: flex; gap: 8px; flex-wrap: wrap; }
+.due { font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; display: grid; gap: 2px; justify-items: end; }
+.chip { font-family: var(--font-body); font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.chip.danger { color: var(--danger); } .chip.warn { color: var(--warn); } .chip.ok { color: var(--ok); } .chip.none { color: var(--ink-soft); }
+.icon-btn { appearance: none; border: 0; background: none; color: var(--ink-soft); cursor: pointer; font: inherit; font-size: 12px; padding: 2px 4px; }
+.icon-btn:hover { color: var(--danger); }
+
+/* 時間割風の授業表 */
+.courses { display: grid; gap: 0; }
+.course { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--rule); }
+.course:first-child { border-top: 0; }
+.slot { font-family: var(--font-mono); font-size: 13px; color: var(--accent); font-weight: 700; }
+
+.empty { border: 1px dashed var(--rule); border-radius: 10px; padding: 20px; text-align: center; display: grid; gap: 10px; justify-items: center; color: var(--ink-soft); }
+
+/* 生成結果 */
+.output { min-width: 0; overflow-wrap: anywhere; }
+.output h1, .output h2, .output h3 { line-height: 1.35; margin: 1.2em 0 .4em; }
+.output h1 { font-size: 20px; } .output h2 { font-size: 17px; border-bottom: 1px solid var(--rule); padding-bottom: 4px; } .output h3 { font-size: 15px; }
+.output p, .output li { max-width: 68ch; }
+.output code { font-family: var(--font-mono); font-size: 13px; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
+.output pre { overflow-x: auto; background: var(--bg); padding: 10px; border-radius: 6px; }
+.output table { border-collapse: collapse; display: block; overflow-x: auto; }
+.output th, .output td { border: 1px solid var(--rule); padding: 4px 8px; }
+.output strong { background: linear-gradient(transparent 60%, var(--marker) 60%); }
+.status { font-size: 13px; color: var(--ink-soft); }
+.status.error { color: var(--danger); }
+.notes-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.notes-list li { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--rule); align-items: center; }
+.notes-list li:first-child { border-top: 0; }
+.notes-list button.link { appearance: none; border: 0; background: none; font: inherit; color: var(--accent); cursor: pointer; text-align: left; padding: 0; overflow-wrap: anywhere; }
+.files { font-size: 13px; color: var(--ink-soft); }
+details summary { cursor: pointer; color: var(--ink-soft); font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>学習デスク<small>課題と試験対策</small></h1>
+    <span class="today" id="today"></span>
+  </header>
+  <p class="status error" id="globalStatus" hidden></p>
+
+  <nav role="tablist">
+    <button role="tab" id="tab-tasks" aria-selected="true" data-panel="tasks">課題</button>
+    <button role="tab" id="tab-study" aria-selected="false" data-panel="study">対策資料</button>
+    <button role="tab" id="tab-courses" aria-selected="false" data-panel="courses">授業</button>
+  </nav>
+
+  <!-- 課題 -->
+  <section class="panel" id="panel-tasks">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2>締切が近い順</h2>
+        <label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="showDone" style="width:auto"> 完了済みも表示</label>
+      </div>
+      <ul class="tasks" id="taskList"></ul>
+      <div class="empty" id="taskEmpty" hidden>
+        <span>課題はまだありません。下のフォームから追加するか、例を入れて使い方を見てみてください。</span>
+        <button class="btn ghost small" id="seedBtn">例を入れてみる</button>
+      </div>
+    </div>
+
+    <form class="card" id="taskForm">
+      <h2>課題を追加</h2>
+      <div class="row">
+        <label style="flex:2 1 220px">内容<input id="tTitle" required placeholder="例: レポート第3回"></label>
+        <label>授業<select id="tCourse"></select></label>
+      </div>
+      <div class="row">
+        <label>締切<input id="tDue" type="datetime-local"></label>
+        <label style="flex:0 1 110px">見積もり(時間)<input id="tEst" type="number" min="0" step="0.5" placeholder="2"></label>
+        <button class="btn" type="submit">追加</button>
+      </div>
+      <details>
+        <summary>UTOL やカレンダーの .ics から取り込む</summary>
+        <div class="row" style="margin-top:8px">
+          <label style="flex:2 1 220px">.ics ファイル<input id="icsFile" type="file" accept=".ics,text/calendar"></label>
+          <label>授業<select id="icsCourse"></select></label>
+          <label>タイトルに含む文字(任意)<input id="icsKeyword" placeholder="例: 課題"></label>
+        </div>
+        <p class="status" id="icsStatus"></p>
+      </details>
+    </form>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2>学習計画</h2>
+        <button class="btn" id="planBtn">今日と今週の計画を作る</button>
+      </div>
+      <label>追加の要望(任意)<input id="planReq" placeholder="例: 土曜はバイトで使えない / 夜は2時間まで"></label>
+      <p class="status" id="planStatus"></p>
+      <div class="output" id="planOut"></div>
+    </div>
+  </section>
+
+  <!-- 対策資料 -->
+  <section class="panel" id="panel-study" hidden>
+    <form class="card" id="studyForm">
+      <h2>講義資料から対策資料を作る</h2>
+      <div class="row">
+        <label>授業<select id="sCourse"></select></label>
+        <label>種類
+          <select id="sKind">
+            <option value="guide">対策ノート（要約・重要概念・練習問題）</option>
+            <option value="quiz">想定問題集（解答・解説つき）</option>
+            <option value="cheatsheet">チートシート（A4 1枚）</option>
+          </select>
+        </label>
+      </div>
+      <label>講義スライド・ノート・板書の写真（PDF / .txt / .md / 画像、複数可）<input id="sFiles" type="file" multiple accept=".pdf,.txt,.md,.markdown,image/png,image/jpeg,image/webp"></label>
+      <div class="files" id="sFileInfo"></div>
+      <label>ノートを貼り付け（任意）<textarea id="sPaste" placeholder="授業中のメモや、配布資料のテキストなど"></textarea></label>
+      <label>重視してほしいこと（任意）<input id="sFocus" placeholder="例: 第5〜8回、期末試験、計算問題多め"></label>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn ghost" type="button" id="sStop" hidden>止める</button>
+        <button class="btn" type="submit" id="sGo">生成する</button>
+      </div>
+      <p class="status" id="sStatus"></p>
+    </form>
+
+    <div class="card" id="noteCard" hidden>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2 id="noteTitle"></h2>
+        <button class="btn ghost small" id="noteDownload" type="button" hidden>.md で保存</button>
+      </div>
+      <div class="output" id="noteOut"></div>
+    </div>
+
+    <div class="card">
+      <h2>保存した資料</h2>
+      <ul class="notes-list" id="noteList"></ul>
+      <p class="muted" id="noteEmpty">生成した資料はここに保存されます。</p>
+    </div>
+  </section>
+
+  <!-- 授業 -->
+  <section class="panel" id="panel-courses" hidden>
+    <div class="card">
+      <h2>履修中の授業</h2>
+      <div class="courses" id="courseList"></div>
+      <p class="muted" id="courseEmpty">授業を登録すると、課題の分類と試験日からの逆算ができます。</p>
+    </div>
+    <form class="card" id="courseForm">
+      <h2>授業を追加</h2>
+      <div class="row">
+        <label style="flex:2 1 200px">授業名<input id="cName" required placeholder="例: 線形代数学"></label>
+        <label style="flex:0 1 120px">曜限<input id="cSlot" placeholder="例: 月2・木2"></label>
+        <label>試験日<input id="cExam" type="date"></label>
+        <button class="btn" type="submit">追加</button>
+      </div>
+      <label>メモ（任意）<input id="cNotes" placeholder="例: 中間レポートあり、持ち込み可"></label>
+    </form>
+  </section>
+
+  <p class="muted" id="storageNote"></p>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const WD = "日月火水木金土";
+  const state = { uid: null, db: null, sample: null, downloads: null, courses: [], tasks: [], notes: [], lastPlan: null, current: null };
+  let profileRef = null, profileWrite = Promise.resolve();
+
+  // ---------- 日付 ----------
+  const now = () => new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const fmtDate = (d) => `${d.getMonth() + 1}/${d.getDate()}(${WD[d.getDay()]}) ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const isoLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  $("today").textContent = (() => { const d = now(); return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} (${WD[d.getDay()]})`; })();
+
+  function remaining(due) {
+    if (!due) return { text: "締切なし", cls: "none", urgent: false };
+    const ms = new Date(due) - now();
+    if (ms < 0) return { text: "期限切れ", cls: "danger", urgent: true };
+    const h = ms / 36e5;
+    if (h < 24) return { text: `あと${Math.max(1, Math.floor(h))}時間`, cls: "danger", urgent: true };
+    const d = Math.floor(h / 24);
+    return { text: `あと${d}日`, cls: d <= 3 ? "warn" : "ok", urgent: d <= 2 };
+  }
+  const courseName = (id) => state.courses.find((c) => c.id === id)?.name || "";
+
+  // ---------- 保存 ----------
+  function saveProfile(patch) {
+    Object.assign(state, patch);
+    if (!profileRef) return;
+    const body = { courses: state.courses, lastPlan: state.lastPlan };
+    profileWrite = profileWrite.then(() => profileRef.set(body)).catch((e) => showError(dbMessage(e)));
+  }
+  async function saveTask(task) {
+    if (!state.db) { const i = state.tasks.findIndex((t) => t.id === task.id); i >= 0 ? state.tasks[i] = task : state.tasks.push(task); renderTasks(); return; }
+    try { await profileRef.collection("tasks").doc(task.id).set(task); } catch (e) { showError(dbMessage(e)); }
+  }
+  async function deleteTask(id) {
+    if (!state.db) { state.tasks = state.tasks.filter((t) => t.id !== id); renderTasks(); return; }
+    try { await profileRef.collection("tasks").doc(id).delete(); } catch (e) { showError(dbMessage(e)); }
+  }
+  async function saveNote(note) {
+    if (!state.db) { state.notes.unshift(note); renderNotes(); return; }
+    try { await profileRef.collection("notes").doc(note.id).set(note); } catch (e) { showError(dbMessage(e)); }
+  }
+  async function deleteNote(id) {
+    if (!state.db) { state.notes = state.notes.filter((n) => n.id !== id); renderNotes(); return; }
+    try { await profileRef.collection("notes").doc(id).delete(); } catch (e) { showError(dbMessage(e)); }
+  }
+  const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  function dbMessage(e) {
+    if (e?.code === "quota_exceeded") return "保存領域がいっぱいです。古い資料や完了した課題を削除してください。";
+    return "保存できませんでした。通信状況を確認して、もう一度操作してください。";
+  }
+  function showError(msg) { const el = $("globalStatus"); el.textContent = msg; el.hidden = false; }
+
+  // ---------- タブ ----------
+  document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => selectTab(b.dataset.panel)));
+  function selectTab(name) {
+    document.querySelectorAll("nav button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.panel === name)));
+    document.querySelectorAll("section.panel").forEach((p) => p.hidden = p.id !== "panel-" + name);
+    try { localStorage.setItem("tab", name); } catch {}
+  }
+  try { const t = localStorage.getItem("tab"); if (t && $("panel-" + t)) selectTab(t); } catch {}
+  if (["tasks", "study", "courses"].includes(location.hash.slice(1))) selectTab(location.hash.slice(1));
+
+  // ---------- 描画 ----------
+  function renderCourseSelects() {
+    for (const id of ["tCourse", "icsCourse", "sCourse"]) {
+      const sel = $(id), keep = sel.value;
+      sel.replaceChildren(new Option(id === "sCourse" ? "（授業を選ぶ）" : "（なし）", ""));
+      state.courses.forEach((c) => sel.add(new Option(c.name, c.id)));
+      sel.value = state.courses.some((c) => c.id === keep) ? keep : "";
+    }
+  }
+  function renderTasks() {
+    const showDone = $("showDone").checked;
+    const list = state.tasks.filter((t) => showDone || t.status !== "done")
+      .sort((a, b) => (a.status === "done") - (b.status === "done") || (a.due ? new Date(a.due) : Infinity) - (b.due ? new Date(b.due) : Infinity));
+    const ul = $("taskList"); ul.replaceChildren();
+    for (const t of list) {
+      const r = remaining(t.due), done = t.status === "done";
+      const li = document.createElement("li");
+      li.className = "task" + (done ? " done" : r.urgent ? " urgent" : "");
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = done; cb.id = "cb-" + t.id;
+      cb.setAttribute("aria-label", "完了にする");
+      cb.addEventListener("change", () => saveTask({ ...t, status: cb.checked ? "done" : "todo" }));
+      const mid = document.createElement("div"); mid.style.minWidth = "0";
+      const title = document.createElement("div"); title.className = "title"; title.textContent = t.title;
+      const meta = document.createElement("div"); meta.className = "meta";
+      const cn = courseName(t.course); if (cn) meta.append(Object.assign(document.createElement("span"), { textContent: cn }));
+      if (t.estimate) meta.append(Object.assign(document.createElement("span"), { textContent: `目安 ${t.estimate}h` }));
+      const del = Object.assign(document.createElement("button"), { className: "icon-btn", type: "button", textContent: "削除" });
+      del.addEventListener("click", () => {
+        if (del.dataset.armed) return deleteTask(t.id);
+        del.dataset.armed = "1"; del.textContent = "本当に削除";
+        setTimeout(() => { delete del.dataset.armed; del.textContent = "削除"; }, 3000);
+      });
+      meta.append(del);
+      mid.append(title, meta);
+      const due = document.createElement("div"); due.className = "due";
+      due.append(Object.assign(document.createElement("span"), { className: "chip " + (done ? "none" : r.cls), textContent: done ? "完了" : r.text }));
+      if (t.due) due.append(Object.assign(document.createElement("span"), { textContent: fmtDate(new Date(t.due)) }));
+      li.append(cb, mid, due); ul.append(li);
+    }
+    $("taskEmpty").hidden = state.tasks.length > 0;
+  }
+  function renderCourses() {
+    const box = $("courseList"); box.replaceChildren();
+    for (const c of state.courses) {
+      const row = document.createElement("div"); row.className = "course";
+      const slot = Object.assign(document.createElement("span"), { className: "slot", textContent: c.slot || "—" });
+      const mid = document.createElement("div"); mid.style.minWidth = "0";
+      mid.append(Object.assign(document.createElement("div"), { textContent: c.name, style: "font-weight:500" }));
+      const meta = [];
+      if (c.exam) { const r = remaining(c.exam + "T09:00"); meta.push(`試験 ${c.exam.replaceAll("-", "/")}（${r.text}）`); }
+      if (c.notes) meta.push(c.notes);
+      if (meta.length) mid.append(Object.assign(document.createElement("div"), { className: "muted", textContent: meta.join(" · ") }));
+      const del = Object.assign(document.createElement("button"), { className: "icon-btn", type: "button", textContent: "削除" });
+      del.addEventListener("click", () => {
+        if (!del.dataset.armed) { del.dataset.armed = "1"; del.textContent = "本当に削除"; setTimeout(() => { delete del.dataset.armed; del.textContent = "削除"; }, 3000); return; }
+        saveProfile({ courses: state.courses.filter((x) => x.id !== c.id) }); renderAll();
+      });
+      row.append(slot, mid, del); box.append(row);
+    }
+    $("courseEmpty").hidden = state.courses.length > 0;
+  }
+  function renderNotes() {
+    const ul = $("noteList"); ul.replaceChildren();
+    for (const n of state.notes) {
+      const li = document.createElement("li");
+      const open = Object.assign(document.createElement("button"), { className: "link", type: "button", textContent: n.title });
+      open.addEventListener("click", () => showNote(n));
+      const right = document.createElement("span"); right.style.cssText = "display:flex;gap:8px;align-items:center;flex-shrink:0";
+      right.append(Object.assign(document.createElement("span"), { className: "muted", textContent: new Date(n.createdAt).toLocaleDateString("ja-JP") }));
+      const del = Object.assign(document.createElement("button"), { className: "icon-btn", type: "button", textContent: "削除" });
+      del.addEventListener("click", () => {
+        if (!del.dataset.armed) { del.dataset.armed = "1"; del.textContent = "本当に削除"; setTimeout(() => { delete del.dataset.armed; del.textContent = "削除"; }, 3000); return; }
+        deleteNote(n.id);
+      });
+      right.append(del); li.append(open, right); ul.append(li);
+    }
+    $("noteEmpty").hidden = state.notes.length > 0;
+  }
+  function renderPlan() {
+    if (state.lastPlan?.text && !$("planOut").dataset.live) {
+      renderMarkdown($("planOut"), state.lastPlan.text);
+      $("planStatus").textContent = `前回の計画（${fmtDate(new Date(state.lastPlan.at))} 作成）`;
+    }
+  }
+  function renderAll() { renderCourseSelects(); renderTasks(); renderCourses(); renderNotes(); renderPlan(); }
+  function renderMarkdown(el, md) { el.innerHTML = DOMPurify.sanitize(marked.parse(md)); }
+
+  $("showDone").addEventListener("change", renderTasks);
+
+  // ---------- フォーム ----------
+  $("taskForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const due = $("tDue").value;
+    saveTask({ id: newId(), title: $("tTitle").value.trim(), course: $("tCourse").value || null,
+      due: due ? new Date(due).toISOString() : null, estimate: Number($("tEst").value) || null, status: "todo", createdAt: Date.now() });
+    $("tTitle").value = ""; $("tDue").value = ""; $("tEst").value = "";
+  });
+  $("courseForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const c = { id: newId(), name: $("cName").value.trim(), slot: $("cSlot").value.trim(), exam: $("cExam").value || null, notes: $("cNotes").value.trim() };
+    saveProfile({ courses: [...state.courses, c] });
+    e.target.reset(); renderAll();
+  });
+  $("seedBtn").addEventListener("click", () => {
+    const la = { id: newId(), name: "線形代数学（例）", slot: "月2・木2", exam: isoLocal(new Date(Date.now() + 60 * 864e5)).slice(0, 10), notes: "中間レポートあり" };
+    const inf = { id: newId(), name: "情報（例）", slot: "水3", exam: null, notes: "" };
+    saveProfile({ courses: [...state.courses, la, inf] });
+    const at = (days, hour) => { const d = new Date(Date.now() + days * 864e5); d.setHours(hour, 59, 0, 0); return d.toISOString(); };
+    [
+      { title: "レポート第3回（例）", course: la.id, due: at(5, 23), estimate: 3 },
+      { title: "Python課題2（例）", course: inf.id, due: at(1, 12), estimate: 2 },
+      { title: "第4回の復習（例）", course: la.id, due: null, estimate: 1 },
+    ].forEach((t) => saveTask({ id: newId(), status: "todo", createdAt: Date.now(), ...t }));
+    renderAll();
+  });
+
+  // ---------- .ics 取り込み ----------
+  $("icsFile").addEventListener("change", async () => {
+    const f = $("icsFile").files[0]; if (!f) return;
+    const text = (await f.text()).replace(/\r?\n[ \t]/g, "");
+    const known = new Set(state.tasks.map((t) => t.uid).filter(Boolean));
+    const kw = $("icsKeyword").value.trim();
+    let added = 0;
+    for (const block of text.split(/BEGIN:(?:VEVENT|VTODO)/).slice(1)) {
+      const get = (k) => { const m = block.match(new RegExp("^" + k + "(?:;[^:\\r\\n]*)?:(.*)$", "m")); return m ? m[1].trim() : ""; };
+      const summary = get("SUMMARY").replace(/\\([,;\\])/g, "$1").replace(/\\n/gi, " ");
+      const uid = get("UID");
+      if (!summary || (kw && !summary.includes(kw)) || (uid && known.has(uid))) continue;
+      const due = parseIcsDate(get("DUE") || get("DTEND") || get("DTSTART"));
+      if (due && due < now()) continue;
+      saveTask({ id: newId(), title: summary, course: $("icsCourse").value || null, due: due ? due.toISOString() : null, status: "todo", uid: uid || null, createdAt: Date.now() });
+      if (uid) known.add(uid);
+      added++;
+    }
+    $("icsStatus").textContent = `${added} 件の課題を取り込みました（過去の予定と取り込み済みのものは除外）。`;
+    $("icsFile").value = "";
+  });
+  function parseIcsDate(s) {
+    const m = s.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?/);
+    if (!m) return null;
+    const [, y, mo, d, h, mi, , z] = m;
+    if (!h) return new Date(+y, mo - 1, +d, 23, 59);
+    return z ? new Date(Date.UTC(+y, mo - 1, +d, +h, +mi)) : new Date(+y, mo - 1, +d, +h, +mi);
+  }
+
+  // ---------- Claude ----------
+  function sampleErrorText(e) {
+    switch (e?.code) {
+      case "not_granted": case "sampling_disabled": case "not_declared": case "capability_disabled": case "capability_removed":
+        return "このページから Claude を使う許可がありません。ページの権限設定から許可すると使えます。";
+      case "rate_limited": return "使用量の上限に達しました。少し時間をおいてから試してください。";
+      case "prompt_too_large": return "資料が多すぎて一度に送れません。回ごと・章ごとに分けて生成してください。";
+      case "image_rejected": return "読み込めない画像がありました。JPEG / PNG / WebP で試してください。";
+      case "images_unavailable": return "この環境では画像を送れません。テキストか、文字を含む PDF を使ってください。";
+      case "refused": return "Claude がこの内容への回答を断りました。資料や指示を変えて試してください。";
+      case "session_expired": return "サインインの期限が切れました。ページを開き直してください。";
+      case "empty_completion": return "回答が空でした。資料を減らすか、指示を短くして試してください。";
+      case "cancelled": return "止めました。";
+      default: return "途中で接続が切れました。もう一度試してください。";
+    }
+  }
+
+  // 学習計画
+  $("planBtn").addEventListener("click", async () => {
+    if (!state.sample) return;
+    const open = state.tasks.filter((t) => t.status !== "done").sort((a, b) => (a.due ? new Date(a.due) : Infinity) - (b.due ? new Date(b.due) : Infinity));
+    if (!open.length) { $("planStatus").textContent = "未完了の課題がありません。先に課題を追加してください。"; return; }
+    const d = now();
+    const data = {
+      courses: state.courses.map(({ name, slot, exam, notes }) => ({ name, 曜限: slot, 試験日: exam, notes })),
+      tasks: open.map((t) => ({ 内容: t.title, 授業: courseName(t.course), 締切: t.due ? fmtDate(new Date(t.due)) : "なし", 残り: remaining(t.due).text, 見積もり時間: t.estimate })),
+    };
+    const prompt = `あなたは大学生の学習計画を手伝うアシスタントです。
+現在日時: ${d.getFullYear()}/${fmtDate(d)}
+以下の授業と未完了の課題をもとに、現実的に実行できる計画を日本語の Markdown で書いてください。
+
+出力の構成（見出しは ## を使う）:
+1. 今日やること: 優先度順に3〜5個。目安時間と、今日やる理由を一言ずつ。
+2. 今週の計画: 今日から7日分、日ごとに何をどれくらいやるか。曜限がある日は授業があるので負荷を軽めに。
+3. 要注意: 期限切れ、締切の重なり、見積もりに対して時間が足りないもの。なければ省略。
+4. 試験対策: 試験日が近い授業があれば、逆算した準備スケジュール。なければ省略。
+
+見積もり時間がない課題は内容から推測し、推測だと書いてください。前置きや締めの挨拶は不要です。
+${$("planReq").value.trim() ? "\n追加の要望: " + $("planReq").value.trim() + "\n" : ""}
+データ:
+${JSON.stringify(data, null, 1)}`;
+    const btn = $("planBtn"); btn.disabled = true;
+    const out = $("planOut"); out.dataset.live = "1"; out.replaceChildren();
+    $("planStatus").className = "status"; $("planStatus").textContent = "考えています…";
+    try {
+      const { text } = await state.sample(prompt, { cache: false, onText: ({ text }) => { $("planStatus").textContent = "書いています…"; renderMarkdown(out, text); } });
+      renderMarkdown(out, text);
+      saveProfile({ lastPlan: { text, at: Date.now() } });
+      $("planStatus").textContent = `${fmtDate(new Date())} に作成しました。`;
+    } catch (e) {
+      if (e?.text) renderMarkdown(out, e.text); else if (e?.code === "refused") out.replaceChildren();
+      $("planStatus").className = "status error"; $("planStatus").textContent = sampleErrorText(e);
+    } finally { btn.disabled = false; delete out.dataset.live; }
+  });
+
+  // 対策資料
+  const KINDS = {
+    guide: { label: "対策ノート", spec: `「試験対策ノート」を作ってください。構成（見出しは ## ）:
+1. 全体の要約（この範囲で何を学んだか、5〜10行）
+2. 重要概念・用語（定義と、なぜ重要か）
+3. 重要な公式・定理・手順（使いどころと注意点つき）
+4. 試験に出そうなポイント・ひっかけ
+5. 練習問題（基本5問・応用3問程度。問題だけを先に並べる）
+6. 解答と解説
+7. 資料だけでは理解が不十分そうな箇所と、追加で調べるべきこと` },
+    quiz: { label: "想定問題集", spec: `「想定問題集」を作ってください。
+- 一問一答10問、記述・計算問題5問、発展問題2問
+- 各問に難易度（★1〜3）と、資料のどこに対応するかを付ける
+- 解答と詳しい解説は最後の「## 解答・解説」にまとめる` },
+    cheatsheet: { label: "チートシート", spec: `A4 1枚に収まる「チートシート」を作ってください。
+- 公式・定義・手順を最小限の言葉で、カテゴリ別に箇条書き
+- 説明文は極力省き、密度を優先` },
+  };
+  const MAX_TEXT_BYTES = 200 * 1024;
+  let studyCtl = null;
+
+  $("sFiles").addEventListener("change", () => {
+    const fs = [...$("sFiles").files];
+    $("sFileInfo").textContent = fs.length ? fs.map((f) => `${f.name}（${(f.size / 1024 / 1024).toFixed(1)}MB）`).join("、") : "";
+  });
+  $("sStop").addEventListener("click", () => studyCtl?.abort());
+
+  async function readPdf(file, wantImages) {
+    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+    const pages = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const tc = await page.getTextContent();
+      pages.push(tc.items.map((it) => it.str + (it.hasEOL ? "\n" : "")).join("").trim());
+    }
+    const chars = pages.join("").length;
+    // 文字がほとんど取れない PDF（スキャン資料など）は、ページを画像にして送る
+    if (chars < pdf.numPages * 20 && wantImages > 0) {
+      const images = [];
+      for (let i = 1; i <= Math.min(pdf.numPages, wantImages); i++) {
+        const page = await pdf.getPage(i);
+        const vp = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement("canvas"); canvas.width = vp.width; canvas.height = vp.height;
+        await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+        images.push(await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85)));
+      }
+      return { text: "", images, scanned: true, pages: pdf.numPages };
+    }
+    return { text: pages.map((t, i) => `[${file.name} p.${i + 1}]\n${t}`).join("\n\n"), images: [], scanned: false, pages: pdf.numPages };
+  }
+
+  $("studyForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!state.sample) return;
+    const status = $("sStatus"); status.className = "status";
+    const courseId = $("sCourse").value, course = state.courses.find((c) => c.id === courseId);
+    const kind = KINDS[$("sKind").value];
+    const files = [...$("sFiles").files], pasted = $("sPaste").value.trim();
+    if (!files.length && !pasted) { status.className = "status error"; status.textContent = "資料ファイルを選ぶか、ノートを貼り付けてください。"; return; }
+
+    const limits = await state.sample.limits().catch(() => null);
+    const maxImages = limits?.images?.maxCount ?? 0;
+    const texts = [], images = [], notes = [];
+    try {
+      status.textContent = "資料を読み込んでいます…";
+      for (const f of files) {
+        const ext = f.name.split(".").pop().toLowerCase();
+        if (ext === "pdf") {
+          const r = await readPdf(f, maxImages - images.length);
+          if (r.scanned) {
+            images.push(...r.images);
+            if (r.images.length < r.pages) notes.push(`${f.name} は文字を読み取れないPDFのため、先頭${r.images.length}ページだけ画像で送ります`);
+          } else texts.push(r.text);
+        } else if (["txt", "md", "markdown"].includes(ext)) {
+          texts.push(`[${f.name}]\n${await f.text()}`);
+        } else if (f.type.startsWith("image/")) {
+          images.push(f);
+        }
+      }
+    } catch (err) {
+      status.className = "status error"; status.textContent = "PDFを読み込めませんでした。別のファイルで試すか、テキストを貼り付けてください。"; return;
+    }
+    if (pasted) texts.push(`[貼り付けたノート]\n${pasted}`);
+    if (images.length > maxImages) {
+      status.className = "status error";
+      status.textContent = maxImages ? `画像は一度に${maxImages}枚までです。枚数を減らしてください。` : "この環境では画像を送れません。テキストか、文字を含むPDFを使ってください。";
+      return;
+    }
+    const material = texts.join("\n\n---\n\n");
+    if (new TextEncoder().encode(material).length > MAX_TEXT_BYTES) {
+      status.className = "status error"; status.textContent = "資料が多すぎて一度に送れません。回ごと・章ごとにファイルを分けて生成してください。"; return;
+    }
+
+    const prompt = `あなたは大学の授業の試験対策を手伝うチューターです。
+以下の講義資料${images.length ? "（テキストと添付画像。画像は講義スライドや板書の写真）" : ""}の内容に基づいて、日本語の Markdown で${kind.spec}
+
+ルール:
+- 資料に書かれていない内容で補う場合は「（補足）」と明記し、資料由来の内容と区別する
+- 資料のどこに基づくかわかる場合は（ファイル名 p.ページ）の形で示す
+- 数式は LaTeX を使わず、x^2 や √、Σ などのプレーンな表記で書く
+- 前置きや締めの挨拶は書かない
+${course ? `\n授業: ${course.name}${course.exam ? `（試験日 ${course.exam}）` : ""}${course.notes ? `、メモ: ${course.notes}` : ""}` : ""}
+${$("sFocus").value.trim() ? `特に重視してほしいこと: ${$("sFocus").value.trim()}\n` : ""}
+===== 講義資料 =====
+${material || "（テキストなし。添付画像を読んでください）"}`;
+
+    const title = `${course?.name || "授業"} ${kind.label}（${new Date().toLocaleDateString("ja-JP")}）`;
+    const out = $("noteOut");
+    $("noteCard").hidden = false; $("noteTitle").textContent = title; $("noteDownload").hidden = true; out.replaceChildren();
+    status.textContent = (notes.length ? notes.join("。") + "。" : "") + "考えています…（資料が多いと1〜2分かかります）";
+    $("sGo").disabled = true; $("sStop").hidden = false;
+    studyCtl = new AbortController();
+    try {
+      const res = await state.sample(prompt, {
+        modelTier: "complex", cache: false, signal: studyCtl.signal,
+        images: images.length ? images : undefined,
+        onText: ({ text }) => { status.textContent = "書いています…"; renderMarkdown(out, text); },
+      });
+      let text = res.text;
+      if (res.truncated) text += "\n\n> 出力が長すぎて途中で切れました。資料を分けて生成してください。";
+      renderMarkdown(out, text);
+      const sources = files.map((f) => f.name).concat(pasted ? ["貼り付けたノート"] : []);
+      const note = { id: newId(), title, course: courseId || null, kind: $("sKind").value, text, sources, createdAt: Date.now() };
+      state.current = note;
+      await saveNote(note);
+      $("noteDownload").hidden = !state.downloads;
+      status.textContent = "保存しました。下の「保存した資料」からいつでも開けます。";
+    } catch (err) {
+      if (err?.text) renderMarkdown(out, err.text); else if (err?.code === "refused") out.replaceChildren();
+      status.className = err?.code === "cancelled" ? "status" : "status error"; status.textContent = sampleErrorText(err);
+    } finally { $("sGo").disabled = false; $("sStop").hidden = true; studyCtl = null; }
+  });
+
+  function showNote(n) {
+    state.current = n;
+    $("noteCard").hidden = false; $("noteTitle").textContent = n.title;
+    renderMarkdown($("noteOut"), n.text);
+    $("noteDownload").hidden = !state.downloads;
+    $("noteCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  $("noteDownload").addEventListener("click", async () => {
+    const n = state.current; if (!n || !state.downloads) return;
+    const md = `# ${n.title}\n\n資料: ${(n.sources || []).join("、")}\n\n${n.text}\n`;
+    try { await state.downloads.save({ filename: n.title.replace(/[\\/:*?"<>|]/g, "_") + ".md", data: md }); }
+    catch (e) { if (e?.code !== "declined") $("sStatus").textContent = "ファイルを保存できませんでした。"; }
+  });
+
+  // ---------- 起動 ----------
+  renderAll();
+  $("planBtn").disabled = true; $("sGo").disabled = true;
+  (async () => {
+    const c = window.claude;
+    if (!c?.use) { $("storageNote").textContent = "claude.ai の中で開くと、保存と AI 生成が使えます。"; return; }
+    const [db, user, sample, downloads] = await Promise.all(["db", "user", "sample", "downloads"].map((n) => c.use(n).catch(() => null)));
+    state.sample = sample; state.downloads = downloads;
+    $("planBtn").disabled = !sample; $("sGo").disabled = !sample;
+    if (!sample) { $("planStatus").textContent = "この画面では Claude を使えません。"; $("sStatus").textContent = "この画面では Claude を使えません。"; }
+    const uid = user ? await user.id().catch(() => null) : null;
+    if (!db || !uid) { $("storageNote").textContent = "保存先に接続できないため、入力はこの画面を閉じると消えます。サインインして開き直すと保存されます。"; return; }
+    state.db = db; state.uid = uid;
+    profileRef = db.doc(`data/users/${uid}/profile`);
+    $("storageNote").textContent = "課題・授業・資料はあなただけが見られる場所に保存されます。";
+    profileRef.onSnapshot((snap) => {
+      const d = snap.exists ? snap.data() : {};
+      state.courses = Array.isArray(d.courses) ? d.courses : []; state.lastPlan = d.lastPlan || null;
+      renderAll();
+    }, () => showError("保存先との接続が切れました。ページを開き直してください。"));
+    profileRef.collection("tasks").onSnapshot((snap) => { state.tasks = snap.docs.map((x) => x.data()); renderTasks(); },
+      () => showError("保存先との接続が切れました。ページを開き直してください。"));
+    profileRef.collection("notes").orderBy("createdAt", "desc").limit(100).onSnapshot((snap) => { state.notes = snap.docs.map((x) => x.data()); renderNotes(); },
+      () => showError("保存先との接続が切れました。ページを開き直してください。"));
+  })();
+})();
+</script>

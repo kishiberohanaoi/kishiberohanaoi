@@ -1,5 +1,9 @@
 # studybot
 
+> **アプリ版**: ブラウザ・スマホで使えるアプリは `app/index.html`（claude.ai の Artifact として公開。API キー不要）
+> https://claude.ai/artifact/JWHm4dmqTxarRWD4Ngh3MR
+> 以下はコマンドライン版の説明です。
+
 タスク（課題・締切）の管理と、授業の対策資料づくりを Claude で自動化する CLI。
 
 - `tasks.yaml` に授業と課題を書く → **今日/今週の学習計画**を自動生成
