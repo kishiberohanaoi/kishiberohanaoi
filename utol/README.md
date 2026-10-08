@@ -30,6 +30,34 @@ python utol/utol_sync.py --reset-login          # 別アカウントでログイ
 
 ダウンロードした講義資料は、アプリの「対策資料」タブでそのまま選べます。
 
+## 毎朝自動で同期する
+
+一度ふつうに実行してログインしておいてから、自動実行を登録します。
+
+```bash
+python utol/utol_sync.py --install-schedule 07:00 \
+    --out "~/Library/Mobile Documents/com~apple~CloudDocs/utol_export.json" \
+    --ntfy 好きなトピック名
+```
+
+- 毎日指定した時刻に、画面を出さずに UTOL を読み込んで `--out` に書き出します。
+  iCloud Drive / Google Drive / OneDrive のフォルダに書き出すと、スマホのアプリからそのファイルを選べます。
+  （例: Windows の OneDrive なら `--out "%USERPROFILE%\OneDrive\utol_export.json"`）
+- **ログインが切れていたら通知します。** そのときは PC で `python utol/utol_sync.py` を実行してログインし直してください。
+  - PC: macOS / Windows / Linux のデスクトップ通知
+  - スマホ: [ntfy](https://ntfy.sh/) アプリ（無料・アカウント不要）を入れて、`--ntfy` に指定したトピック名を購読すると届きます。
+    トピック名は誰でも購読できるので、`utol-` のあとにランダムな文字を付けるなど、推測されにくい名前にしてください。
+  - 通知のテスト: `python utol/utol_sync.py --test-notify --ntfy トピック名`
+- 成功したときも通知がほしい場合は `--notify-success` を付けます。
+- `--download materials` を付けると講義資料も毎朝ダウンロードします。
+- 解除: `python utol/utol_sync.py --uninstall-schedule`
+- ログ: `~/.studybot/utol-sync.log`
+
+登録のしくみ: Windows はタスクスケジューラ、macOS は launchd、Linux は cron に登録します。
+PC の電源が入っていて、スリープしていないときに動きます（macOS はスリープから復帰したときに実行されます）。
+
+ログイン状態がどれくらい持つかは大学側の設定次第で、試すまでわかりません。数日おきにログインし直しになる可能性もあります。
+
 ## 注意
 
 - UTOL の画面構成を知らずに作っているので、最初は取りこぼしがあるかもしれません。
